@@ -1,0 +1,40 @@
+# Its own workspace root, so this repository builds on its own.
+[workspace]
+
+[package]
+name = "xmip-core-path-xpath"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/IlleNilsson/xmip-core-path-xpath"
+description = "XPath path technology: reads and writes one value in an XML Stream by XPath 1.0, for promote, demote, route and process. A xmip-core-path technology."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# A Technology depends on its parent Capability, never the reverse
+# (repository-model.md). The PathEngine trait lives in path; the structure
+# reader and writer traits it drives live in contract.
+path = { package = "xmip-core-path", git = "https://github.com/IlleNilsson/xmip-core-path", branch = "main" }
+contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main" }
+stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/xmip-core-stream", branch = "main" }
+xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
+
+# The DOM the XPath engine evaluates over, mutable so a rewrite is a write
+# and a serialisation rather than a rebuild; the same pair the schematron
+# contract uses.
+sxd-document = "0.3"
+sxd-xpath = "0.4"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+too_many_lines = "warn"
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+unwrap_used = "warn"
+expect_used = "allow"
