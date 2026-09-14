@@ -256,10 +256,7 @@ fn lexical(value: StructuredValue) -> Result<String, ContractError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn stream(text: &str) -> Stream {
-        Stream::new(StreamId::new(1), text.as_bytes().to_vec(), None)
-    }
+    use path::fixture::stream;
 
     const ORDER: &str = r#"<o:order xmlns:o="urn:example:order" currency="SEK">
   <o:id>A1</o:id><o:line><o:sku>X</o:sku><o:qty>2</o:qty></o:line>
