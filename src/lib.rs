@@ -16,11 +16,11 @@
 //! replaces an element's text or an attribute's value; it does not create
 //! either, because demote names a place rather than inventing structure.
 
-use contract::{
+use path::{Path, PathCost, PathEngine};
+use sdk::contract::{
     ContractDescriptor, ContractError, ContractId, StructureReader, StructureWriter,
     StructuredValue,
 };
-use path::{Path, PathCost, PathEngine};
 use stream::Stream;
 use sxd_document::Package;
 use sxd_xpath::nodeset::Node;
