@@ -5,9 +5,13 @@ The `xpath` path technology, a technology of
 `XPathLanguage`, the `PathLanguage` for the language `xpath`: an expression is
 checked when configuration compiles it and built once per thread that
 evaluates it (the DOM and a compiled `XPath` are not thread-safe), the document
-is parsed once per Message with the context its prefixes bind, and a rewrite
-parses once and serializes once. Promote reads through it, demote writes
-through it to produce a new Stream (ADR-0013), route and process read.
+is parsed once per Message, and a rewrite parses once and serializes once.
+A prefix resolves through the Path's `namespaces` and never through the
+document, so `/o:order` reads the URI the configuration gave `o` whatever
+prefix a document writes for it; a prefix the table does not bind is refused
+as the expression compiles (ADR-0066, amendment 2026-11-08). Promote reads
+through it, demote writes through it to produce a new Stream (ADR-0013),
+route and process read.
 
 ## Toolchain
 
