@@ -221,9 +221,7 @@ impl Xml {
 
 impl Form for Xml {
     fn parse(stream: &Stream) -> Result<Self, ContractError> {
-        let text = stream
-            .text()
-            .map_err(|error| ContractError::new(format!("not UTF-8 text: {error}")))?;
+        let text = path::text(stream)?;
         Self::parse(text)
     }
 }
