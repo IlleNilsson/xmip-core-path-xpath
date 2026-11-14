@@ -22,9 +22,16 @@ contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilss
 stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/xmip-core-stream", branch = "main" }
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
 
-# The DOM the XPath engine evaluates over, mutable so a rewrite is a write
-# and one serialization at the end rather than a rebuild; the same pair the schematron
-# contract uses.
+# The estate's one XML reader: a document is read by codec's tree and only
+# then built into the engine's model.
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+
+# XPath 1.0 and the model it is written over, and nothing else: sxd-xpath
+# evaluates over sxd-document's DOM alone, so the DOM is XPath's evaluation
+# model, filled from codec's reader and never parsing text itself. Mutable,
+# so a rewrite is a write and one serialization at the end. No other crate
+# in the estate links either (test/ThirdParty.Test.ps1); the Schematron
+# contract evaluates through this crate.
 sxd-document = "0.3"
 sxd-xpath = "0.4"
 
