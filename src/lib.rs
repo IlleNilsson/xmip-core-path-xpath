@@ -5,7 +5,9 @@
 //! [`XPathLanguage`] is the [`PathLanguage`] `xpath`: it compiles an
 //! expression once, and the compiled expression reads one value from an XML
 //! Stream and writes one into a rewrite of it (ADR-0013). Promote reads
-//! through it; demote writes through it; route and process read.
+//! through it; demote writes through it; route and process read. The
+//! Schematron contract evaluates its rules through [`Expression`] and
+//! [`Document`], so the estate evaluates `XPath` in one place.
 //!
 //! `XPath` is 1.0. An expression that selects nodes yields the first node's
 //! string value; one that computes yields its number, boolean or string.
@@ -18,25 +20,27 @@
 //! create either, because demote names a place rather than inventing
 //! structure.
 //!
-//! **Once, and where.** The document is parsed once per Message, and every
-//! expression reading that Message evaluates over it; a rewrite parses once
-//! and serializes once, at the end. The DOM and a compiled expression are
-//! not thread-safe, so the expression is checked when configuration
-//! compiles it and built, with the evaluation context its namespaces bind,
-//! once per thread that evaluates it, then kept there.
+//! **Once, and where.** The document is read once per Message by the
+//! estate's one XML reader and built into the engine's model
+//! ([`Document`]), and every expression reading that Message evaluates over
+//! it; a rewrite reads once and serializes once, at the end. The model and
+//! a compiled expression are not thread-safe, so an expression is checked
+//! when configuration compiles it and built, with the evaluation context
+//! its namespaces bind, once per thread that evaluates it, then kept there
+//! ([`Expression::ready`]).
 
+mod document;
+mod expression;
 mod prefix;
 
 use contract::ContractError;
-use path::{CompiledExpression, Content, Editable, Form, Namespaces, PathLanguage, Rewriting};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-use stream::Stream;
-use sxd_document::Package;
-use sxd_xpath::nodeset::Node;
-use sxd_xpath::{Context, Factory, Value, XPath};
+use path::{CompiledExpression, Content, PathLanguage, Rewriting};
+use sxd_xpath::Value;
 use xcore::ScalarValue;
+
+pub use document::Document;
+pub use expression::{Expression, Ready, Selected};
+pub use path::Namespaces;
 
 /// The language `xpath`.
 pub struct XPathLanguage;
@@ -54,100 +58,14 @@ impl PathLanguage for XPathLanguage {
         expression: &str,
         namespaces: &Namespaces,
     ) -> Result<Box<dyn CompiledExpression>, ContractError> {
-        build(expression)?;
-        let unbound: Vec<&str> = prefix::used(expression)
-            .into_iter()
-            .filter(|prefix| namespaces.uri(prefix).is_none())
-            .collect();
-        if !unbound.is_empty() {
-            return Err(ContractError::new(format!(
-                "XPath {expression:?} uses the prefix {}, which the path's namespaces do not bind",
-                unbound.join(", ")
-            )));
-        }
-        Ok(Box::new(Compiled {
-            expression: expression.to_string(),
-            namespaces: namespaces.clone(),
-        }))
+        Ok(Box::new(Expression::compile(expression, namespaces)?))
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// How often this thread built an expression, for the test that holds
-    /// the once.
-    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-fn build(expression: &str) -> Result<XPath, ContractError> {
-    #[cfg(test)]
-    BUILT.with(|built| built.set(built.get() + 1));
-    Factory::new()
-        .build(expression)
-        .map_err(|error| ContractError::new(format!("XPath {expression:?}: {error}")))?
-        .ok_or_else(|| ContractError::new(format!("XPath {expression:?} is empty")))
-}
-
-/// An expression built, and the evaluation context its namespaces bind.
-struct Built {
-    xpath: XPath,
-    context: Context<'static>,
-}
-
-/// One expression's builds, one per namespaces it was compiled with.
-type Builds = Vec<(Namespaces, Rc<Built>)>;
-
-thread_local! {
-    /// Every expression this thread has evaluated, built once per
-    /// namespaces it was compiled with.
-    static BUILT_HERE: RefCell<HashMap<String, Builds>> = RefCell::new(HashMap::new());
-}
-
-/// An expression checked at configuration, built on first use per thread.
-struct Compiled {
-    expression: String,
-    namespaces: Namespaces,
-}
-
-impl Compiled {
-    fn built(&self) -> Result<Rc<Built>, ContractError> {
-        BUILT_HERE.with(|here| {
-            if let Some((_, found)) = here.borrow().get(&self.expression).and_then(|built| {
-                built
-                    .iter()
-                    .find(|(namespaces, _)| *namespaces == self.namespaces)
-            }) {
-                return Ok(Rc::clone(found));
-            }
-            let mut context = Context::new();
-            for (prefix, uri) in self.namespaces.iter() {
-                context.set_namespace(prefix, uri);
-            }
-            let built = Rc::new(Built {
-                xpath: build(&self.expression)?,
-                context,
-            });
-            here.borrow_mut()
-                .entry(self.expression.clone())
-                .or_default()
-                .push((self.namespaces.clone(), Rc::clone(&built)));
-            Ok(built)
-        })
-    }
-
-    fn evaluate<'d>(&self, xml: &'d Xml) -> Result<Value<'d>, ContractError> {
-        let built = self.built()?;
-        built
-            .xpath
-            .evaluate(&built.context, xml.package.as_document().root())
-            .map_err(|error| ContractError::new(format!("XPath {:?}: {error}", self.expression)))
-    }
-}
-
-impl CompiledExpression for Compiled {
+impl CompiledExpression for Expression {
     fn read(&self, content: &Content<'_>) -> Result<Option<ScalarValue>, ContractError> {
-        let xml = content.form::<Xml>()?;
-        Ok(match self.evaluate(&xml)? {
+        let document = content.form::<Document>()?;
+        Ok(match self.ready()?.evaluate(document.root())? {
             Value::Nodeset(nodes) => nodes
                 .document_order_first()
                 .map(|node| ScalarValue::Text(node.string_value())),
@@ -166,7 +84,7 @@ impl CompiledExpression for Compiled {
     /// value of the first attribute; a Null writes empty text. Anything else
     /// selected, or nothing, is refused.
     fn write(&self, rewriting: &mut Rewriting, value: ScalarValue) -> Result<(), ContractError> {
-        let path = &self.expression;
+        let path = self.text();
         let text = match &value {
             ScalarValue::Null => String::new(),
             other => other
@@ -174,77 +92,22 @@ impl CompiledExpression for Compiled {
                 .ok_or_else(|| ContractError::new("binary has no XML text form here"))?
                 .into_owned(),
         };
-        let xml = rewriting.form_mut::<Xml>()?;
-        let Value::Nodeset(nodes) = self.evaluate(xml)? else {
+        let document = rewriting.form_mut::<Document>()?;
+        let Value::Nodeset(nodes) = self.ready()?.evaluate(document.root())? else {
             return Err(ContractError::new(format!(
                 "{path:?} computes a value, it does not select a place"
             )));
         };
-        match nodes.document_order_first() {
-            Some(Node::Element(element)) => {
-                element.set_text(&text);
-            }
-            Some(Node::Attribute(attribute)) => {
-                let owner = attribute.parent().ok_or_else(|| {
-                    ContractError::new(format!("{path:?} selects an orphaned attribute"))
-                })?;
-                owner.set_attribute_value(attribute.name(), &text);
-            }
-            Some(_) => {
-                return Err(ContractError::new(format!(
-                    "{path:?} selects neither an element nor an attribute"
-                )));
-            }
-            None => {
-                return Err(ContractError::new(format!(
-                    "{path:?} selects nothing to write"
-                )));
-            }
-        }
-        Ok(())
-    }
-}
-
-/// An XML document, parsed once. Its own prefixes bind nothing an
-/// expression reads.
-struct Xml {
-    package: Package,
-}
-
-impl Xml {
-    fn parse(text: &str) -> Result<Self, ContractError> {
-        let package = sxd_document::parser::parse(text)
-            .map_err(|error| ContractError::new(format!("not well-formed XML: {error}")))?;
-        Ok(Self { package })
-    }
-}
-
-impl Form for Xml {
-    fn parse(stream: &Stream) -> Result<Self, ContractError> {
-        let text = path::text(stream)?;
-        Self::parse(text)
-    }
-}
-
-impl Editable for Xml {
-    const MEDIA_TYPE: &'static str = "application/xml";
-
-    fn open(bytes: &[u8]) -> Result<Self, ContractError> {
-        let text = std::str::from_utf8(bytes)
-            .map_err(|error| ContractError::new(format!("not UTF-8 text: {error}")))?;
-        Self::parse(text)
-    }
-
-    fn into_bytes(self) -> Result<Vec<u8>, ContractError> {
-        let mut bytes = Vec::new();
-        sxd_document::writer::format_document(&self.package.as_document(), &mut bytes)
-            .map_err(|error| ContractError::new(format!("cannot serialize XML: {error}")))?;
-        Ok(bytes)
+        let node = nodes
+            .document_order_first()
+            .ok_or_else(|| ContractError::new(format!("{path:?} selects nothing to write")))?;
+        Document::write(node, &text, path)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::expression::{BUILT, BUILT_HERE};
     use super::*;
     use contract::fixture::stream;
     use xcore::StreamId;
@@ -429,5 +292,64 @@ mod tests {
         );
         assert!(compiled("count(").is_err());
         assert!(compiled("").is_err());
+        let doctype = stream("<!DOCTYPE a [<!ENTITY x \"y\">]><a>&x;</a>");
+        assert!(id.read(&Content::of(&doctype)).is_err());
+    }
+
+    #[test]
+    fn selected_nodes_are_located_and_a_test_holds_at_each() {
+        let document = Document::parse(ORDER).expect("parses");
+        let ready = |text: &str| Expression::compile(text, &order_namespaces()).expect("compiles");
+        let lines = ready("//o:line");
+        let found = lines
+            .ready()
+            .expect("ready")
+            .select(&document)
+            .expect("selects");
+        let at: Vec<String> = found.iter().map(|node| node.location()).collect();
+        assert_eq!(at, ["/order/line[1]", "/order/line[2]"]);
+        let more = ready("o:qty > 2");
+        let more = more.ready().expect("ready");
+        let held: Vec<bool> = found
+            .iter()
+            .map(|node| more.holds(*node).expect("holds"))
+            .collect();
+        assert_eq!(held, [false, true]);
+        let currency = ready("/o:order/@currency");
+        let currency = currency.ready().expect("ready").select(&document);
+        assert_eq!(currency.expect("selects")[0].location(), "/order/@currency");
+        let counted = ready("count(//o:line)");
+        let selected = counted
+            .ready()
+            .expect("ready")
+            .select(&document)
+            .expect("selects");
+        assert_eq!(selected.len(), 0, "a computed value selects nothing");
+    }
+
+    #[test]
+    fn a_document_written_back_keeps_its_prefixes_namespaces_comments_and_instructions() {
+        use codec::xml::tree::Node;
+        let text = "<?xml version=\"1.0\"?><!-- head --><o:order xmlns:o=\"urn:example:order\" \
+                    xmlns=\"urn:d\" xmlns:x=\"urn:x\" x:flag=\"1\"><line>t&amp;u</line>\
+                    <?keep me?></o:order>";
+        let bytes = <Document as path::Editable>::open(text.as_bytes())
+            .and_then(path::Editable::into_bytes)
+            .expect("writes");
+        let back = String::from_utf8(bytes).expect("UTF-8");
+        let read = codec::xml::tree::Document::parse(&back).expect("reads back");
+        let root = read.root_element();
+        assert_eq!(
+            (root.name(), root.namespace()),
+            ("o:order", Some("urn:example:order"))
+        );
+        assert_eq!(root.attribute_in("urn:x", "flag"), Some("1"), "{back}");
+        let line = root.elements().next().expect("line");
+        assert_eq!(
+            (line.namespace(), line.text()),
+            (Some("urn:d"), Some("t&u"))
+        );
+        assert!(read.root().children().any(Node::is_comment), "{back}");
+        assert!(root.children().any(|node| node.name() == "keep"), "{back}");
     }
 }
