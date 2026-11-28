@@ -14,14 +14,14 @@ path = "src/lib.rs"
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md). The PathLanguage trait, the content a compiled path
 # reads and the rewriting it writes live in path; the error in contract.
-path = { package = "xmip-core-path", git = "https://github.com/IlleNilsson/xmip-core-path", branch = "main" }
-contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main" }
-stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/xmip-core-stream", branch = "main" }
-xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
+path = { workspace = true }
+contract = { workspace = true }
+stream = { workspace = true }
+xcore = { workspace = true }
 
 # The estate's one XML reader: a document is read by codec's tree and only
 # then built into the engine's model.
-codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+codec = { workspace = true }
 
 # XPath 1.0 and the model it is written over, and nothing else: sxd-xpath
 # evaluates over sxd-document's DOM alone, so the DOM is XPath's evaluation
@@ -34,7 +34,7 @@ sxd-xpath = "0.4"
 
 [dev-dependencies]
 # The Stream fixture, for the tests only (ADR-0044).
-contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main", features = ["test-support"] }
+contract = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true
